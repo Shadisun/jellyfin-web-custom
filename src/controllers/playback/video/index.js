@@ -197,7 +197,6 @@ export default function (view) {
             btnFastForward.disabled = true;
             btnRewind.disabled = true;
             view.querySelector('.btnSubtitles').classList.add('hide');
-            view.querySelector('.btnAudio').classList.add('hide');
             view.querySelector('.osdTitle').innerHTML = '';
             view.querySelector('.osdMediaInfo').innerHTML = '';
             return;
@@ -210,18 +209,12 @@ export default function (view) {
         btnFastForward.disabled = false;
         btnRewind.disabled = false;
 
-        if (playbackManager.subtitleTracks(player).length) {
+        if (playbackManager.subtitleTracks(player).length || playbackManager.audioTracks(player).length > 1) {
             view.querySelector('.btnSubtitles').classList.remove('hide');
             toggleSubtitleSync();
         } else {
             view.querySelector('.btnSubtitles').classList.add('hide');
             toggleSubtitleSync('forceToHide');
-        }
-
-        if (playbackManager.audioTracks(player).length > 1) {
-            view.querySelector('.btnAudio').classList.remove('hide');
-        } else {
-            view.querySelector('.btnAudio').classList.add('hide');
         }
 
         if (currentItem.Chapters?.length > 1) {
@@ -1018,34 +1011,104 @@ export default function (view) {
         }
     }
 
-    function showAudioTrackSelection() {
+    function showLanguageMenu() {
         const player = currentPlayer;
+        const subtitleStreams = playbackManager.subtitleTracks(player);
         const audioTracks = playbackManager.audioTracks(player);
-        const currentIndex = playbackManager.getAudioStreamIndex(player);
-        const menuItems = audioTracks.map(function (stream) {
+        const secondaryStreams = playbackManager.secondarySubtitleTracks(player);
+
+        let currentSubtitleIndex = playbackManager.getSubtitleStreamIndex(player);
+        const currentAudioIndex = playbackManager.getAudioStreamIndex(player);
+
+        if (currentSubtitleIndex == null) {
+            currentSubtitleIndex = -1;
+        }
+
+        const menuItems = [];
+
+        // Add audio tracks section
+        if (audioTracks.length > 1) {
+            menuItems.push({
+                name: globalize.translate('Audio'),
+                id: 'audio-header',
+                divider: true
+            });
+
+            audioTracks.forEach(function (stream) {
+                const opt = {
+                    name: stream.DisplayTitle,
+                    id: 'audio-' + stream.Index,
+                    selected: stream.Index === currentAudioIndex
+                };
+                menuItems.push(opt);
+            });
+        }
+
+        // Add subtitle tracks section
+        if (subtitleStreams.length > 0 || audioTracks.length > 1) {
+            menuItems.push({
+                name: globalize.translate('Subtitles'),
+                id: 'subtitle-header',
+                divider: true
+            });
+        }
+
+        // Add "Off" option for subtitles
+        menuItems.push({
+            name: globalize.translate('Off'),
+            id: 'subtitle--1',
+            selected: currentSubtitleIndex === -1
+        });
+
+        // Add subtitle tracks
+        subtitleStreams.forEach(function (stream) {
             const opt = {
                 name: stream.DisplayTitle,
-                id: stream.Index
+                id: 'subtitle-' + stream.Index,
+                selected: stream.Index === currentSubtitleIndex
             };
-
-            if (stream.Index === currentIndex) {
-                opt.selected = true;
-            }
-
-            return opt;
+            menuItems.push(opt);
         });
+
+        // Add secondary subtitles option if available
+        const currentTrackCanAddSecondarySubtitle = playbackManager.playerHasSecondarySubtitleSupport(player)
+                && subtitleStreams.length > 1
+                && secondaryStreams.length > 0
+                && currentSubtitleIndex !== -1
+                && playbackManager.trackHasSecondarySubtitleSupport(playbackManager.getSubtitleStream(player, currentSubtitleIndex), player);
+
+        if (currentTrackCanAddSecondarySubtitle) {
+            menuItems.push({
+                name: globalize.translate('SecondarySubtitles'),
+                id: 'secondarysubtitle'
+            });
+        }
+
         const positionTo = this;
 
         import('../../../components/actionSheet/actionSheet').then(({ default: actionsheet }) => {
             actionsheet.show({
+                title: globalize.translate('Language'),
                 items: menuItems,
-                title: globalize.translate('Audio'),
                 positionTo: positionTo
             }).then(function (id) {
-                const index = parseInt(id, 10);
-
-                if (index !== currentIndex) {
-                    playbackManager.setAudioStreamIndex(index, player);
+                if (id === 'secondarysubtitle') {
+                    try {
+                        showSecondarySubtitlesMenu(actionsheet, positionTo);
+                    } catch (e) {
+                        console.error(e);
+                    }
+                } else if (id && id.startsWith('audio-')) {
+                    const index = parseInt(id.replace('audio-', ''), 10);
+                    if (index !== currentAudioIndex) {
+                        playbackManager.setAudioStreamIndex(index, player);
+                    }
+                } else if (id && id.startsWith('subtitle-')) {
+                    const index = parseInt(id.replace('subtitle-', ''), 10);
+                    if (index !== currentSubtitleIndex) {
+                        playbackManager.setSubtitleStreamIndex(index, player);
+                    }
+                    toggleSubtitleSync();
                 }
             }).finally(() => {
                 resetIdle();
@@ -1100,86 +1163,6 @@ export default function (view) {
             });
 
         setTimeout(resetIdle, 0);
-    }
-
-    function showSubtitleTrackSelection() {
-        const player = currentPlayer;
-        const streams = playbackManager.subtitleTracks(player);
-        const secondaryStreams = playbackManager.secondarySubtitleTracks(player);
-        let currentIndex = playbackManager.getSubtitleStreamIndex(player);
-
-        if (currentIndex == null) {
-            currentIndex = -1;
-        }
-
-        streams.unshift({
-            Index: -1,
-            DisplayTitle: globalize.translate('Off')
-        });
-        const menuItems = streams.map(function (stream) {
-            const opt = {
-                name: stream.DisplayTitle,
-                id: stream.Index
-            };
-
-            if (stream.Index === currentIndex) {
-                opt.selected = true;
-            }
-
-            return opt;
-        });
-
-        /**
-            * Only show option if:
-            * - player has support
-            * - has more than 1 subtitle track
-            * - has valid secondary tracks
-            * - primary subtitle is not off
-            * - primary subtitle has support
-            */
-        const currentTrackCanAddSecondarySubtitle = playbackManager.playerHasSecondarySubtitleSupport(player)
-                && streams.length > 1
-                && secondaryStreams.length > 0
-                && currentIndex !== -1
-                && playbackManager.trackHasSecondarySubtitleSupport(playbackManager.getSubtitleStream(player, currentIndex), player);
-
-        if (currentTrackCanAddSecondarySubtitle) {
-            const secondarySubtitleMenuItem = {
-                name: globalize.translate('SecondarySubtitles'),
-                id: 'secondarysubtitle'
-            };
-            menuItems.unshift(secondarySubtitleMenuItem);
-        }
-
-        const positionTo = this;
-
-        import('../../../components/actionSheet/actionSheet').then(({ default: actionsheet }) => {
-            actionsheet.show({
-                title: globalize.translate('Subtitles'),
-                items: menuItems,
-                positionTo: positionTo
-            }).then(function (id) {
-                if (id === 'secondarysubtitle') {
-                    try {
-                        showSecondarySubtitlesMenu(actionsheet, positionTo);
-                    } catch (e) {
-                        console.error(e);
-                    }
-                } else {
-                    const index = parseInt(id, 10);
-
-                    if (index !== currentIndex) {
-                        playbackManager.setSubtitleStreamIndex(index, player);
-                    }
-                }
-
-                toggleSubtitleSync();
-            }).finally(() => {
-                resetIdle();
-            });
-
-            setTimeout(resetIdle, 0);
-        });
     }
 
     function toggleSubtitleSync(action) {
@@ -1958,8 +1941,7 @@ export default function (view) {
     btnFastForward.addEventListener('click', function () {
         playbackManager.fastForward(currentPlayer);
     });
-    view.querySelector('.btnAudio').addEventListener('click', showAudioTrackSelection);
-    view.querySelector('.btnSubtitles').addEventListener('click', showSubtitleTrackSelection);
+    view.querySelector('.btnSubtitles').addEventListener('click', showLanguageMenu);
 
     // HACK: Remove `emby-button` from the rating button to make it look like the other buttons
     view.querySelector('.btnUserRating').classList.remove('emby-button');
